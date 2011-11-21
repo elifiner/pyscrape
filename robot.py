@@ -3,7 +3,7 @@ import urllib2
 import cookielib
 import logging
 from collections import OrderedDict
-from BeautifulSoup import BeautifulSoup
+from BeautifulSoup import BeautifulSoup, NavigableString
 
 logger = logging.getLogger("PyScrape")
 
@@ -310,14 +310,20 @@ class Form(object):
 def htmlentitiesdecode(text):
     if text is None:
         return text
-    entities = [BeautifulSoup.XML_ENTITIES, BeautifulSoup.HTML_ENTITIES]
-    return unicode(BeautifulSoup(text, convertEntities=entities))
+    return unicode(BeautifulSoup(text, convertEntities=BeautifulSoup.XHTML_ENTITIES))
 
 def urljoin(base, url):
     """Joins a base url and a relative path to create an absolute URL"""
     import urlparse
     joined = urlparse.urljoin(base, url)
     return joined.replace("../", "")
+
+def soup2text(soup):
+    text = []
+    for e in soup.recursiveChildGenerator():
+        if isinstance(e, NavigableString):
+            text.append(htmlentitiesdecode(e))
+    return " ".join(text)
 
 def bytes(s):
     if isinstance(s, unicode):
