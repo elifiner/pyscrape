@@ -1,6 +1,11 @@
 import urllib
 import urllib2
+import cookielib
+import logging
+from collections import OrderedDict
 from BeautifulSoup import BeautifulSoup
+
+logger = logging.getLogger("PyScrape")
 
 class BrowserError(Exception):
     def __init__(self, msg="robot.Browser encountered an error"):
@@ -8,17 +13,32 @@ class BrowserError(Exception):
     def __str__(self):
         return self.msg
 
+class HTTPRequestLogger(urllib2.BaseHandler):
+    handler_order = 1000
+    def http_request(self, request):
+        logger.debug("HTTP %s: %s" % (request.get_method(), request.get_full_url()))
+        data = request.get_data()
+        if data:
+            logger.debug("\tData: %s" % data)
+        logger.debug("\tHeaders:")
+        for k, v in request.header_items():
+            logger.debug("\t\t%s: %s" % (k, v))
+        return request
+    https_request = http_request
+
 # ------------------------------------------------------------------------------
 
 class Browser(object):
     def __init__(self, userAgent="robot/1.0"):
         self._userAgent = userAgent
         self._passwordManager = urllib2.HTTPPasswordMgrWithDefaultRealm()
+        self._cookieJar = cookielib.CookieJar()
         
         self._opener = urllib2.build_opener(
-            urllib2.HTTPCookieProcessor(),
+            urllib2.HTTPCookieProcessor(self._cookieJar),
             urllib2.HTTPBasicAuthHandler(self._passwordManager),
-            urllib2.HTTPDigestAuthHandler(self._passwordManager)
+            urllib2.HTTPDigestAuthHandler(self._passwordManager),
+            HTTPRequestLogger(),
         )
         
         self.currentUrl = None
@@ -48,15 +68,21 @@ class Browser(object):
         The loaded page can be accessed through self.page (as HTML text) and 
         self.soup (as BeautifulSoup structure).
         """
-        
-        self.currentUrl = url
-        request = urllib2.Request(self.currentUrl)
+        if not url.startswith("http://") and not url.startswith("https://"):
+            if self.currentUrl:
+                url = urljoin(self.currentUrl, url)
+            else:
+                raise BrowserError("unknown url format, pass HTTP or HTTPS urls "
+                    "or urls relative to current location (%s)" % (self.currentUrl)) 
+
+        request = urllib2.Request(url)
         request.add_header("User-Agent", self._userAgent)
-        
+
         # try several times to protect from short network problems
         for i in range(retries):
             try:
                 response = self._opener.open(request, postData)
+                self.currentUrl = request.get_full_url()
                 self.headers = response.info()
                 self.page = response.read()
                 self.soup = BeautifulSoup(self.page)
@@ -70,8 +96,8 @@ class Browser(object):
         
         if error:
             raise error
-            
-        return self.page
+
+        return self.currentUrl
         
     def follow_link(self, hrefContains):
         """
@@ -98,6 +124,29 @@ class Browser(object):
             return links
         else:
             raise BrowserError("Can't find links containing '%s'" % hrefContains)
+
+    def follow_frame(self, hrefContains):
+        assert(self.soup)
+        return self.goto(self.get_frame_link(hrefContains))
+
+    def get_frame_link(self, hrefContains):
+        return self.get_frame_links(hrefContains)[0]
+
+    def get_frame_links(self, hrefContains):
+        """
+        Finds links inside the current HTML page and returns their addresses.
+        """
+        assert(self.soup)
+        aTags = self.soup.findAll("frame", src=lambda v: v and hrefContains in v)
+        if aTags:
+            links = []
+            for aTag in aTags:
+                link = urljoin(self.currentUrl, aTag.get("src"))
+                link = link.replace('&amp;','&')
+                links.append(link)
+            return links
+        else:
+            raise BrowserError("Can't find frame links containing '%s'" % hrefContains)
         
     def get_form(self, name):
         """
@@ -177,26 +226,35 @@ class Form(object):
     def __init__(self, browser, soup):
         self.browser = browser
         self.soup = soup
-        self.defaults = {}
-        self.submits = {}
+        self.fields = OrderedDict()
+        self.submits = OrderedDict()
         self._load_defaults()
     
     def submit(self, submitName=None, **kwargs):
         """
-        Submits the form using keyword arguments as form parameters.
-        The submitName is the 'name' attribute of the submit input tag, useful 
-        if there is more than one submit button on the page.
-        Moves the Browser object it was created from to the new page after submission.
+        Submits the form using arguments as form parameters. 'submitName' is
+        the 'name' attribute of the submit input tag, useful if there is more
+        than one submit button on the page.  Moves the parent Browser to the
+        new page after successful submission.
         """
+        return self._submit(submitName=None, **kwargs)
+
+    def _submit(self, submitName=None, **kwargs):
         action = urljoin(self.browser.currentUrl, self.soup.get("action"))
         fields = {}
-        submitValue = self.submits.get(submitName)
+        if submitName:
+            submitValue = self.submits.get(submitName)
+        elif len(self.submits) == 1:
+            submitName, submitValue = self.submits.items()[0]
+        else:
+            raise BrowserError("No submit name provided, use one of [%s]" % ", ".join(self.submits.keys()))
         if submitValue:
             fields[submitName] = submitValue
-        fields.update(self.defaults)
+        fields.update(self.fields)
         fields.update(kwargs)
-        fields = dict((bytes(k), bytes(v)) for (k, v) in fields.items())
+        fields = dict((bytes(k), bytes(v)) for (k, v) in fields.items() if v is not None)
         postData = urllib.urlencode(fields)
+        print postData
         self.browser.goto(action, postData)
         return self.browser.soup
         
@@ -204,29 +262,27 @@ class Form(object):
         """
         Loads the default values for the form from the HTML.
         """
-        self.defaults = {}
-        
-        # get default values for input self.defaults
+        # get default values for input self.fields
         for inputTag in self.soup.findAll("input"):
             name = inputTag.get("name")
-            value = inputTag.get("value") or ""
-            type = inputTag.get("type")
+            value = inputTag.get("value")
+            inputType = inputTag.get("type")
             disabled = (inputTag.get("disabled") == "disabled")
-            if name and value and not disabled:
-                if type == "submit":
+            if name and not disabled:
+                if inputType == "submit":
                     self.submits[name] = htmlentitiesdecode(value)
-                else:
-                    self.defaults[name] = htmlentitiesdecode(value)
+                elif inputType not in ["button"]:
+                    self.fields[name] = htmlentitiesdecode(value)
                 
-        # get default values for textarea self.defaults
+        # get default values for textarea self.fields
         for textTag in self.soup.findAll("textarea"):
             name = textTag.get("name")
-            value = textTag.get("value") or ""
+            value = textTag.get("value")
             disabled = (textTag.get("disabled") == "disabled")
-            if name and value and not disabled:
-                self.defaults[name] = htmlentitiesdecode(value)
+            if name and not disabled:
+                self.fields[name] = htmlentitiesdecode(value)
                 
-        # get default values for select self.defaults
+        # get default values for select self.fields
         for selectTag in self.soup.findAll("select"):
             name = selectTag.get("name")
             disabled = (inputTag.get("disabled") == "disabled")
@@ -236,14 +292,24 @@ class Form(object):
                     if optionTag.get("selected") == "selected":
                         value = optionTag.get("value").strip()
                 if value:
-                    self.defaults[name] = htmlentitiesdecode(value)
-        
-        return self.defaults
-        
+                    self.fields[name] = htmlentitiesdecode(value)
+
+        # dynamically create submit method with correct parameters for IPython auto-completion
+        params = ", ".join(["%s=%r" % (k,v) for k,v in self.fields.items()])
+        args = ", ".join(["%s=%s" % (k,k) for k in self.fields.keys()])
+        code = "def submit_with_params(self, submitName=None, %s): self._submit(submitName, %s)" % (params, args)
+        exec(code)
+        submit_with_params.__doc__ = self.submit.__doc__
+        self.submit = type(self.submit)(submit_with_params, self, type(self))
+
+        return self.fields
+
     def __str__(self):
         return self.soup.get("action")
                 
 def htmlentitiesdecode(text):
+    if text is None:
+        return text
     entities = [BeautifulSoup.XML_ENTITIES, BeautifulSoup.HTML_ENTITIES]
     return unicode(BeautifulSoup(text, convertEntities=entities))
     
