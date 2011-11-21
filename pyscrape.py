@@ -45,6 +45,7 @@ class Browser(object):
         self.page = None
         self.headers = {}
         self.soup = None
+        self._forms = []
 
     def duplicate(self):
         """
@@ -79,23 +80,22 @@ class Browser(object):
         request.add_header("User-Agent", self._userAgent)
 
         # try several times to protect from short network problems
-        for i in range(retries):
+        while True:
             try:
                 response = self._opener.open(request, postData)
                 self.currentUrl = request.get_full_url()
                 self.headers = response.info()
                 self.page = response.read()
                 self.soup = BeautifulSoup(self.page)
+                self._forms = []
             except Exception, e:
-                error = e
+                if retries <= 0:
+                    raise
                 import time
                 time.sleep(1) # wait a second between retries
+                retries -= 1
             else:
-                error = None
                 break
-
-        if error:
-            raise error
 
         return self.currentUrl
 
@@ -147,6 +147,14 @@ class Browser(object):
             return links
         else:
             raise BrowserError("Can't find frame links containing '%s'" % hrefContains)
+
+    def _get_forms(self):
+        assert(self.soup)
+        if not self._forms:
+            for formSoup in self.soup.findAll("form"):
+                self._forms.append(Form(self, formSoup))
+        return self._forms
+    forms = property(_get_forms)
 
     def get_form(self, name):
         """
@@ -224,6 +232,8 @@ class Browser(object):
 
 class Form(object):
     def __init__(self, browser, soup):
+        self.name = soup.get("name")
+        self.id = soup.get("id")
         self.browser = browser
         self.soup = soup
         self.fields = OrderedDict()
@@ -254,7 +264,6 @@ class Form(object):
         fields.update(kwargs)
         fields = dict((bytes(k), bytes(v)) for (k, v) in fields.items() if v is not None)
         postData = urllib.urlencode(fields)
-        print postData
         self.browser.goto(action, postData)
         return self.browser.soup
 
@@ -294,18 +303,13 @@ class Form(object):
                 if value:
                     self.fields[name] = htmlentitiesdecode(value)
 
-        # dynamically create submit method with correct parameters for IPython auto-completion
-        params = ", ".join(["%s=%r" % (k,v) for k,v in self.fields.items()])
-        args = ", ".join(["%s=%s" % (k,k) for k in self.fields.keys()])
-        code = "def submit_with_params(self, submitName=None, %s): self._submit(submitName, %s)" % (params, args)
-        exec(code)
-        submit_with_params.__doc__ = self.submit.__doc__
-        self.submit = type(self.submit)(submit_with_params, self, type(self))
-
         return self.fields
 
     def __str__(self):
         return self.soup.get("action")
+
+    def __repr__(self):
+        return "<Form name='%s' id='%s' action=%s'>" % (self.soup.get("name"), self.soup.get("id"), self.soup.get("action"))
 
 def htmlentitiesdecode(text):
     if text is None:
