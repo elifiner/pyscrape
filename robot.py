@@ -33,14 +33,14 @@ class Browser(object):
         self._userAgent = userAgent
         self._passwordManager = urllib2.HTTPPasswordMgrWithDefaultRealm()
         self._cookieJar = cookielib.CookieJar()
-        
+
         self._opener = urllib2.build_opener(
             urllib2.HTTPCookieProcessor(self._cookieJar),
             urllib2.HTTPBasicAuthHandler(self._passwordManager),
             urllib2.HTTPDigestAuthHandler(self._passwordManager),
             HTTPRequestLogger(),
         )
-        
+
         self.currentUrl = None
         self.page = None
         self.headers = {}
@@ -49,7 +49,7 @@ class Browser(object):
     def duplicate(self):
         """
         Return a duplicate of the browser with the current state.
-        Usually used to call two follow_link's from the same page and to 
+        Usually used to call two follow_link's from the same page and to
         implement Back like behviour using a stack of Browser objects.
         The duplicate uses the same URL opener as the original and therefore
         is a rather light weight object.
@@ -65,7 +65,7 @@ class Browser(object):
     def goto(self, url, postData=None, username=None, password=None, retries=3):
         """
         Goes to a URL, optionally passing it POST data.
-        The loaded page can be accessed through self.page (as HTML text) and 
+        The loaded page can be accessed through self.page (as HTML text) and
         self.soup (as BeautifulSoup structure).
         """
         if not url.startswith("http://") and not url.startswith("https://"):
@@ -73,7 +73,7 @@ class Browser(object):
                 url = urljoin(self.currentUrl, url)
             else:
                 raise BrowserError("unknown url format, pass HTTP or HTTPS urls "
-                    "or urls relative to current location (%s)" % (self.currentUrl)) 
+                    "or urls relative to current location (%s)" % (self.currentUrl))
 
         request = urllib2.Request(url)
         request.add_header("User-Agent", self._userAgent)
@@ -93,22 +93,22 @@ class Browser(object):
             else:
                 error = None
                 break
-        
+
         if error:
             raise error
 
         return self.currentUrl
-        
+
     def follow_link(self, hrefContains):
         """
         Finds a link inside the current HTML page and goes to it.
         """
         assert(self.soup)
         return self.goto(self.get_link(hrefContains))
-        
+
     def get_link(self, hrefContains):
         return self.get_links(hrefContains)[0]
-            
+
     def get_links(self, hrefContains):
         """
         Finds links inside the current HTML page and returns their addresses.
@@ -147,7 +147,7 @@ class Browser(object):
             return links
         else:
             raise BrowserError("Can't find frame links containing '%s'" % hrefContains)
-        
+
     def get_form(self, name):
         """
         Returns a Form object which can be used to submit form requests.
@@ -158,26 +158,26 @@ class Browser(object):
             return Form(self, formSoup)
         else:
             raise BrowserError("Can't find a form with name '%s'" % name)
-            
+
     def sanitize(self, regexp):
         """
         Remove parts of the HTML using a regular expression and re-parse using
-        BeautifulSoup. Use this if BeautifulSoup fails to parse the document 
+        BeautifulSoup. Use this if BeautifulSoup fails to parse the document
         correctly.
         """
         import re
         self.page = re.sub(regexp, "", self.page)
         self.soup = BeautifulSoup(self.page)
-            
+
     def show_in_browser(self):
         """
-        Saves the data of the current page in a temporary file and shows it in 
+        Saves the data of the current page in a temporary file and shows it in
         the default browser.
         """
         # use a separate soup for this because we're modifying it and don't want
         # to influence code that relies on self.soup
         soup = BeautifulSoup(self.page)
-        
+
         # convert relative paths to absolute paths in all relevant tags
         relativeTags = [
             ("link", "href"),
@@ -186,24 +186,24 @@ class Browser(object):
             ("script", "src"),
             ("form", "action"),
         ]
-        
+
         for tagName, attrName in relativeTags:
             for tag in soup.findAll(tagName):
                 url = tag.get(attrName)
                 if url:
                     absUrl = urljoin(self.currentUrl, url)
                     tag[attrName] = absUrl
-                    
+
         # add content type in the html
         if "Content-Type" in self.headers:
             headTag = soup.find("head")
             contentTypeTag = BeautifulSoup(
-                '<meta http-equiv="content-type" content="%s">' % 
+                '<meta http-equiv="content-type" content="%s">' %
                 self.headers.get("Content-Type")
             )
             headTag.insert(0, contentTypeTag)
-            
-        # write page to temp file    
+
+        # write page to temp file
         import tempfile
         import os
         (fno, tempName) = tempfile.mkstemp('.html', 'robot-')
@@ -211,17 +211,17 @@ class Browser(object):
         f = open(tempName, "w")
         f.write(str(soup))
         f.close()
-        
+
         # display page in browser
         import webbrowser
         webbrowser.open(tempName)
-        
+
     def _get_title(self):
         return self.soup.find("title").string
     title = property(_get_title)
 
 # ------------------------------------------------------------------------------
-    
+
 class Form(object):
     def __init__(self, browser, soup):
         self.browser = browser
@@ -229,7 +229,7 @@ class Form(object):
         self.fields = OrderedDict()
         self.submits = OrderedDict()
         self._load_defaults()
-    
+
     def submit(self, submitName=None, **kwargs):
         """
         Submits the form using arguments as form parameters. 'submitName' is
@@ -257,7 +257,7 @@ class Form(object):
         print postData
         self.browser.goto(action, postData)
         return self.browser.soup
-        
+
     def _load_defaults(self):
         """
         Loads the default values for the form from the HTML.
@@ -273,7 +273,7 @@ class Form(object):
                     self.submits[name] = htmlentitiesdecode(value)
                 elif inputType not in ["button"]:
                     self.fields[name] = htmlentitiesdecode(value)
-                
+
         # get default values for textarea self.fields
         for textTag in self.soup.findAll("textarea"):
             name = textTag.get("name")
@@ -281,7 +281,7 @@ class Form(object):
             disabled = (textTag.get("disabled") == "disabled")
             if name and not disabled:
                 self.fields[name] = htmlentitiesdecode(value)
-                
+
         # get default values for select self.fields
         for selectTag in self.soup.findAll("select"):
             name = selectTag.get("name")
@@ -306,19 +306,19 @@ class Form(object):
 
     def __str__(self):
         return self.soup.get("action")
-                
+
 def htmlentitiesdecode(text):
     if text is None:
         return text
     entities = [BeautifulSoup.XML_ENTITIES, BeautifulSoup.HTML_ENTITIES]
     return unicode(BeautifulSoup(text, convertEntities=entities))
-    
+
 def urljoin(base, url):
     """Joins a base url and a relative path to create an absolute URL"""
     import urlparse
     joined = urlparse.urljoin(base, url)
     return joined.replace("../", "")
-    
+
 def bytes(s):
     if isinstance(s, unicode):
         return s.encode("utf8")
