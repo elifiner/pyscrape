@@ -8,7 +8,7 @@ from BeautifulSoup import BeautifulSoup, NavigableString
 logger = logging.getLogger("PyScrape")
 
 class BrowserError(Exception):
-    def __init__(self, msg="robot.Browser encountered an error"):
+    def __init__(self, msg="pyscrape.Browser encountered an error"):
         self.msg = msg
     def __str__(self):
         return self.msg
@@ -29,7 +29,7 @@ class HTTPRequestLogger(urllib2.BaseHandler):
 # ------------------------------------------------------------------------------
 
 class Browser(object):
-    def __init__(self, userAgent="robot/1.0"):
+    def __init__(self, userAgent="pyscrape/1.0"):
         self._userAgent = userAgent
         self._passwordManager = urllib2.HTTPPasswordMgrWithDefaultRealm()
         self._cookieJar = cookielib.CookieJar()
@@ -88,7 +88,7 @@ class Browser(object):
                 self.page = response.read()
                 self.soup = BeautifulSoup(self.page)
                 self._forms = []
-            except Exception, e:
+            except Exception:
                 if retries <= 0:
                     raise
                 import time
@@ -148,13 +148,13 @@ class Browser(object):
         else:
             raise BrowserError("Can't find frame links containing '%s'" % hrefContains)
 
-    def _get_forms(self):
+    @property
+    def forms(self):
         assert(self.soup)
         if not self._forms:
             for formSoup in self.soup.findAll("form"):
                 self._forms.append(Form(self, formSoup))
         return self._forms
-    forms = property(_get_forms)
 
     def get_form(self, name):
         """
@@ -214,7 +214,7 @@ class Browser(object):
         # write page to temp file
         import tempfile
         import os
-        (fno, tempName) = tempfile.mkstemp('.html', 'robot-')
+        (fno, tempName) = tempfile.mkstemp('.html', 'pyscrape-')
         os.close(fno)
         f = open(tempName, "w")
         f.write(str(soup))
@@ -224,9 +224,9 @@ class Browser(object):
         import webbrowser
         webbrowser.open(tempName)
 
-    def _get_title(self):
+    @property
+    def title(self):
         return self.soup.find("title").string
-    title = property(_get_title)
 
 # ------------------------------------------------------------------------------
 
