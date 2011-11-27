@@ -154,7 +154,7 @@ class Browser(object):
         if not self._forms:
             for formSoup in self.soup.findAll("form"):
                 self._forms.append(Form(self, formSoup))
-        return self._forms
+        return Forms(self._forms)
 
     def get_form(self, name):
         """
@@ -230,6 +230,13 @@ class Browser(object):
 
 # ------------------------------------------------------------------------------
 
+class Forms(list):
+    def get(self, name):
+        forms = [form for form in self if form.id == name or form.name == name]
+        if forms:
+            return forms[0]
+        return None
+
 class Form(object):
     def __init__(self, browser, soup):
         self.name = soup.get("name")
@@ -239,6 +246,7 @@ class Form(object):
         self.fields = OrderedDict()
         self.submits = OrderedDict()
         self._load_defaults()
+        self._update_submit_docstring()
 
     def submit(self, submitName=None, **kwargs):
         """
@@ -247,16 +255,17 @@ class Form(object):
         than one submit button on the page.  Moves the parent Browser to the
         new page after successful submission.
         """
-        return self._submit(submitName=None, **kwargs)
+        return self._submit(submit=submitName, **kwargs)
 
     def _submit(self, submitName=None, **kwargs):
         action = urljoin(self.browser.currentUrl, self.soup.get("action"))
         fields = {}
+        submitValue = None
         if submitName:
             submitValue = self.submits.get(submitName)
         elif len(self.submits) == 1:
             submitName, submitValue = self.submits.items()[0]
-        else:
+        elif len(self.submits) > 0:
             raise BrowserError("No submit name provided, use one of [%s]" % ", ".join(self.submits.keys()))
         if submitValue:
             fields[submitName] = submitValue
@@ -304,6 +313,18 @@ class Form(object):
                     self.fields[name] = htmlentitiesdecode(value)
 
         return self.fields
+    
+    def _update_submit_docstring(self):
+        """
+        Some Python magic to update the submit method's docstring according to
+        the actual fields in the form. This is useful in interactive Python
+        mode while developing scraping code.
+        """
+        def submit(submitName=None, **kwargs):
+            self._submit(submitName, **kwargs)
+        params = ", ".join("%s=%r" % (k, v) for k, v in self.fields.items())
+        submit.__doc__ = "submit(submitName=None, %s)\n%s" % (params, self.submit.__doc__)
+        self.submit = type(self.submit)(submit, self, type(self))
 
     def __str__(self):
         return self.soup.get("action")
