@@ -69,6 +69,7 @@ class Browser(object):
         The loaded page can be accessed through self.page (as HTML text) and
         self.soup (as BeautifulSoup structure).
         """
+        url = bytes(url, "ascii")
         if not url.startswith("http://") and not url.startswith("https://"):
             if self.currentUrl:
                 url = urljoin(self.currentUrl, url)
@@ -320,9 +321,13 @@ class Form(object):
         the actual fields in the form. This is useful in interactive Python
         mode while developing scraping code.
         """
-        def submit(submitName=None, **kwargs):
+        def submit(self, submitName=None, **kwargs):
             self._submit(submitName, **kwargs)
-        params = ", ".join("%s=%r" % (k, v) for k, v in self.fields.items())
+        def shorten(s, l=30):
+            if isinstance(s, basestring) and len(s) > l:
+                return s[:l-3]+"..."
+            return s
+        params = ", ".join("%s=%r" % (k, shorten(v)) for k, v in self.fields.items())
         submit.__doc__ = "submit(submitName=None, %s)\n%s" % (params, self.submit.__doc__)
         self.submit = type(self.submit)(submit, self, type(self))
 
@@ -350,8 +355,8 @@ def soup2text(soup):
             text.append(htmlentitiesdecode(e))
     return " ".join(text)
 
-def bytes(s):
+def bytes(s, encoding="utf8"):
     if isinstance(s, unicode):
-        return s.encode("utf8")
+        return s.encode(encoding)
     else:
         return s
