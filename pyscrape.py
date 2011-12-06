@@ -1,11 +1,16 @@
+import re
 import urllib
 import urllib2
-import cookielib
 import logging
+import cookielib
 from collections import OrderedDict
 from BeautifulSoup import BeautifulSoup, NavigableString
 
 logger = logging.getLogger("PyScrape")
+
+AGENTS = {
+    "chrome" : "Mozilla/5.0 (X11; Linux i686) AppleWebKit/535.2 (KHTML, like Gecko) Ubuntu/11.10 Chromium/15.0.874.120 Chrome/15.0.874.120 Safari/535.2",
+}
 
 class BrowserError(Exception):
     def __init__(self, msg="pyscrape.Browser encountered an error"):
@@ -42,26 +47,43 @@ class Browser(object):
         )
 
         self.currentUrl = None
-        self.page = None
         self.headers = {}
-        self.soup = None
+        self.page = ""
+        self.soup = BeautifulSoup()
+        self._reset()
+
+    def _reset(self):
         self._forms = []
+        self._links = []
+        self._frames = []
+
+    @property
+    def forms(self):
+        if not self._forms:
+            self._forms = Forms([Form(self, form) for form in self.soup.findAll("form")])
+        return self._forms
+
+    @property
+    def links(self):
+        if not self._links:
+            self._links = Links([Link(self, link) for link in self.soup.findAll("a")])
+        return self._links
+
+    @property
+    def frames(self):
+        if not self._frames:
+            self._frames = Frames([Frame(self, frame) for frame in self.soup.findAll("frame")])
+        return self._frames
 
     def duplicate(self):
         """
         Return a duplicate of the browser with the current state.
-        Usually used to call two follow_link's from the same page and to
-        implement Back like behviour using a stack of Browser objects.
-        The duplicate uses the same URL opener as the original and therefore
-        is a rather light weight object.
+        Can be used to scrape sites using multiple threads.
         """
-        browser = Browser.__new__(Browser)
-        browser._opener = self._opener
-        browser._userAgent = self._userAgent
-        browser.currentUrl = self.currentUrl
-        browser.page = self.page
-        browser.soup = self.soup
-        return browser
+        import copy
+        newobj = copy.copy(self)
+        newobj._reset()
+        return newobj
 
     def goto(self, url, postData=None, username=None, password=None, retries=3):
         """
@@ -84,11 +106,11 @@ class Browser(object):
         while True:
             try:
                 response = self._opener.open(request, postData)
-                self.currentUrl = request.get_full_url()
+                self.currentUrl = response.geturl()
                 self.headers = response.info()
                 self.page = response.read()
                 self.soup = BeautifulSoup(self.page)
-                self._forms = []
+                self._reset()
             except Exception:
                 if retries <= 0:
                     raise
@@ -100,81 +122,12 @@ class Browser(object):
 
         return self.currentUrl
 
-    def follow_link(self, hrefContains):
-        """
-        Finds a link inside the current HTML page and goes to it.
-        """
-        assert(self.soup)
-        return self.goto(self.get_link(hrefContains))
-
-    def get_link(self, hrefContains):
-        return self.get_links(hrefContains)[0]
-
-    def get_links(self, hrefContains):
-        """
-        Finds links inside the current HTML page and returns their addresses.
-        """
-        assert(self.soup)
-        aTags = self.soup.findAll("a", href=lambda v: v and hrefContains in v)
-        if aTags:
-            links = []
-            for aTag in aTags:
-                link = urljoin(self.currentUrl, aTag.get("href"))
-                link = link.replace('&amp;','&')
-                links.append(link)
-            return links
-        else:
-            raise BrowserError("Can't find links containing '%s'" % hrefContains)
-
-    def follow_frame(self, hrefContains):
-        assert(self.soup)
-        return self.goto(self.get_frame_link(hrefContains))
-
-    def get_frame_link(self, hrefContains):
-        return self.get_frame_links(hrefContains)[0]
-
-    def get_frame_links(self, hrefContains):
-        """
-        Finds links inside the current HTML page and returns their addresses.
-        """
-        assert(self.soup)
-        aTags = self.soup.findAll("frame", src=lambda v: v and hrefContains in v)
-        if aTags:
-            links = []
-            for aTag in aTags:
-                link = urljoin(self.currentUrl, aTag.get("src"))
-                link = link.replace('&amp;','&')
-                links.append(link)
-            return links
-        else:
-            raise BrowserError("Can't find frame links containing '%s'" % hrefContains)
-
-    @property
-    def forms(self):
-        assert(self.soup)
-        if not self._forms:
-            for formSoup in self.soup.findAll("form"):
-                self._forms.append(Form(self, formSoup))
-        return Forms(self._forms)
-
-    def get_form(self, name):
-        """
-        Returns a Form object which can be used to submit form requests.
-        """
-        assert(self.soup)
-        formSoup = self.soup.find("form", dict(name=name))
-        if formSoup:
-            return Form(self, formSoup)
-        else:
-            raise BrowserError("Can't find a form with name '%s'" % name)
-
     def sanitize(self, regexp):
         """
         Remove parts of the HTML using a regular expression and re-parse using
         BeautifulSoup. Use this if BeautifulSoup fails to parse the document
         correctly.
         """
-        import re
         self.page = re.sub(regexp, "", self.page)
         self.soup = BeautifulSoup(self.page)
 
@@ -228,8 +181,51 @@ class Browser(object):
     @property
     def title(self):
         return self.soup.find("title").string
+    
 
 # ------------------------------------------------------------------------------
+
+class Frames(list):
+    def get(self, href):
+        frames = [frame for frame in self if href in frame.src]
+        if frames:
+            return frames[0]
+        return None
+
+class Frame(object):
+    def __init__(self, browser, soup):
+        self.browser = browser
+        self.soup = soup
+
+    @property
+    def src(self):
+        return self.soup.get("src")
+
+    def goto(self):
+        self.browser.goto(self.src)
+
+class Links(list):
+    def get(self, href):
+        links = [link for link in self if href in link.href]
+        if links:
+            return links[0]
+        return None
+
+class Link(object):
+    def __init__(self, browser, soup):
+        self.browser = browser
+        self.soup = soup
+
+    @property
+    def href(self):
+        return self.soup.get("href")
+
+    @property
+    def text(self):
+        return soup2text(self.soup)
+
+    def goto(self):
+        self.browser.goto(self.href)
 
 class Forms(list):
     def get(self, name):
@@ -240,14 +236,20 @@ class Forms(list):
 
 class Form(object):
     def __init__(self, browser, soup):
-        self.name = soup.get("name")
-        self.id = soup.get("id")
         self.browser = browser
         self.soup = soup
         self.fields = OrderedDict()
         self.submits = OrderedDict()
         self._load_defaults()
         self._update_submit_docstring()
+
+    @property
+    def id(self):
+        return self.soup.get("id")
+
+    @property
+    def name(self):
+        return self.soup.get("name")
 
     def submit(self, submitName=None, **kwargs):
         """
@@ -336,6 +338,8 @@ class Form(object):
 
     def __repr__(self):
         return "<Form name='%s' id='%s' action=%s'>" % (self.soup.get("name"), self.soup.get("id"), self.soup.get("action"))
+
+# ------------------------------------------------------------------------------
 
 def htmlentitiesdecode(text):
     if text is None:
