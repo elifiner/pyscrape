@@ -1,0 +1,8 @@
+TASKS
+=====
+
+* Support Google App Engine urlfetch API
+* Add support for method="get" forms
+V Add back() function to browser
+V Browswer object should know current page encoding (from <meta> tags or HTTP headers)
+V URL and form encodings should use current page encoding

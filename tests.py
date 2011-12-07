@@ -7,6 +7,7 @@ class BrowserTestBase(unittest.TestCase):
     def setUp(self):
         # A mapping of URLs to HTMLs that will be returned by mock_http_open
         self.mockReturnedHtmls = {
+            "http://www.example.com" : "<html>Example</html>"
         }
 
         # A mapping of URLs to URLs that mock_http_open will simulate redirecting to
@@ -57,7 +58,7 @@ class MiscTests(BrowserTestBase):
 
 class FormTests(BrowserTestBase):
     def test_form(self):
-        self.mockReturnedHtmls["http://www.example.com/"] = """\
+        self.mockReturnedHtmls["http://www.example.com"] = """\
 <html>
     <form id="login" action="login.cgi">
         <input name="username">
@@ -70,7 +71,7 @@ class FormTests(BrowserTestBase):
 
         with self.patch_http_open():
             browser = pyscrape.Browser()
-            browser.goto("http://www.example.com/")
+            browser.goto("http://www.example.com")
             form = browser.forms.get("login")
             assert ["username", "password", "submit"] == form.fields.keys()
             form.submit(username="guest", password="12345678")
@@ -80,7 +81,7 @@ class FormTests(BrowserTestBase):
 
 class LinkTests(BrowserTestBase):
     def test_link(self):
-        self.mockReturnedHtmls["http://www.example.com/"] = """\
+        self.mockReturnedHtmls["http://www.example.com"] = """\
 <html>
     <a href="one.html">one</a>
     <a href="two.html">two</a>
@@ -91,7 +92,7 @@ class LinkTests(BrowserTestBase):
 
         with self.patch_http_open():
             browser = pyscrape.Browser()
-            browser.goto("http://www.example.com/")
+            browser.goto("http://www.example.com")
             assert len(browser.links) == 2
             browserCopy = browser.duplicate()
 
@@ -105,7 +106,7 @@ class LinkTests(BrowserTestBase):
 
 class FrameTests(BrowserTestBase):
     def test_frame(self):
-        self.mockReturnedHtmls["http://www.example.com/"] = """\
+        self.mockReturnedHtmls["http://www.example.com"] = """\
 <html>
     <frameset cols="25%,75%">
        <frame src="frame_a.htm" />
@@ -118,7 +119,7 @@ class FrameTests(BrowserTestBase):
 
         with self.patch_http_open():
             browser = pyscrape.Browser()
-            browser.goto("http://www.example.com/")
+            browser.goto("http://www.example.com")
             browserCopy = browser.duplicate()
             assert len(browser.frames) == 2
 
@@ -129,3 +130,19 @@ class FrameTests(BrowserTestBase):
             browserCopy.frames.get("frame_b").goto()
             assert self.last_request().get_full_url() == "http://www.example.com/frame_b.htm"
             assert browserCopy.page == "<html>frame_b</html>"
+
+class BackTests(BrowserTestBase):
+    def test_back(self):
+        self.mockReturnedHtmls["http://www.example.com/1"] = "location1"
+        self.mockReturnedHtmls["http://www.example.com/2"] = "location2"
+        self.mockReturnedHtmls["http://www.example.com/3"] = "location3"
+        with self.patch_http_open():
+            browser = pyscrape.Browser()
+            browser.goto("http://www.example.com/1")
+            browser.goto("2")
+            assert self.last_request().get_full_url() == "http://www.example.com/2"
+            browser.back()
+            assert self.last_request().get_full_url() == "http://www.example.com/1"
+            browser.goto("3")
+            assert self.last_request().get_full_url() == "http://www.example.com/3"
+

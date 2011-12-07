@@ -38,6 +38,7 @@ class Browser(object):
         self._userAgent = userAgent
         self._passwordManager = urllib2.HTTPPasswordMgrWithDefaultRealm()
         self._cookieJar = cookielib.CookieJar()
+        self._history = []
 
         self._opener = urllib2.build_opener(
             urllib2.HTTPCookieProcessor(self._cookieJar),
@@ -56,24 +57,39 @@ class Browser(object):
         self._forms = []
         self._links = []
         self._frames = []
+        self._iframes = []
 
     @property
     def forms(self):
         if not self._forms:
-            self._forms = Forms([Form(self, form) for form in self.soup.findAll("form")])
+            self._forms = HtmlObjects([Form(self, form) for form in self.soup.findAll("form")])
         return self._forms
 
     @property
     def links(self):
         if not self._links:
-            self._links = Links([Link(self, link) for link in self.soup.findAll("a")])
+            self._links = HtmlObjects([Link(self, link) for link in self.soup.findAll("a")])
         return self._links
 
     @property
     def frames(self):
         if not self._frames:
-            self._frames = Frames([Frame(self, frame) for frame in self.soup.findAll("frame")])
+            self._frames = HtmlObjects([Frame(self, frame) for frame in self.soup.findAll("frame")])
         return self._frames
+
+    @property
+    def iframes(self):
+        if not self._iframes:
+            self._iframes = HtmlObjects([IFrame(self, frame) for frame in self.soup.findAll("iframe")])
+        return self._iframes
+
+    @property
+    def title(self):
+        return self.soup.find("title").string
+
+    @property
+    def encoding(self):
+        re.search("charset=(.+)$", b.headers.get("content-type")).group(1)
 
     def duplicate(self):
         """
@@ -91,6 +107,7 @@ class Browser(object):
         The loaded page can be accessed through self.page (as HTML text) and
         self.soup (as BeautifulSoup structure).
         """
+        logger.info("goto: %s" % url)
         url = bytes(url, "ascii")
         if not url.startswith("http://") and not url.startswith("https://"):
             if self.currentUrl:
@@ -106,10 +123,12 @@ class Browser(object):
         while True:
             try:
                 response = self._opener.open(request, postData)
+                if not self._history or url != self._history[-1]:
+                    self._history.append(url)
                 self.currentUrl = response.geturl()
                 self.headers = response.info()
                 self.page = response.read()
-                self.soup = BeautifulSoup(self.page)
+                self.soup = BeautifulSoup(self.page, fromEncoding=self._get_http_encoding())
                 self._reset()
             except Exception:
                 if retries <= 0:
@@ -121,6 +140,20 @@ class Browser(object):
                 break
 
         return self.currentUrl
+
+    def _get_http_encoding(self):
+        contentType = self.headers.get("content-type")
+        if contentType:
+            m = re.search("charset=(.+)$", contentType)
+            if m:
+                return m.group(1)
+        return None
+
+    def back(self):
+        if len(self._history) >= 2:
+            url = self._history[-2]
+            del self._history[:-2]
+            self.goto(url)
 
     def sanitize(self, regexp):
         """
@@ -156,8 +189,9 @@ class Browser(object):
                     absUrl = urljoin(self.currentUrl, url)
                     tag[attrName] = absUrl
 
-        # add content type in the html
-        if "Content-Type" in self.headers:
+        # add content type to the html if it doesn't already have one
+        htmlHasContentType = soup.find("meta", {"http-equiv":lambda v: v.lower() == "content-type"})
+        if not htmlHasContentType and "Content-Type" in self.headers:
             headTag = soup.find("head")
             contentTypeTag = BeautifulSoup(
                 '<meta http-equiv="content-type" content="%s">' %
@@ -178,21 +212,21 @@ class Browser(object):
         import webbrowser
         webbrowser.open(tempName)
 
-    @property
-    def title(self):
-        return self.soup.find("title").string
-    
 
 # ------------------------------------------------------------------------------
 
-class Frames(list):
-    def get(self, href):
-        frames = [frame for frame in self if href in frame.src]
-        if frames:
-            return frames[0]
+class HtmlObjects(list):
+    def get(self, key):
+        objects = [obj for obj in self if obj._matches(key)]
+        if objects:
+            return objects[0]
         return None
 
-class Frame(object):
+class HtmlObject(object):
+    def _match(self, key):
+        raise NotImplemented()
+
+class Frame(HtmlObject):
     def __init__(self, browser, soup):
         self.browser = browser
         self.soup = soup
@@ -204,14 +238,16 @@ class Frame(object):
     def goto(self):
         self.browser.goto(self.src)
 
-class Links(list):
-    def get(self, href):
-        links = [link for link in self if href in link.href]
-        if links:
-            return links[0]
-        return None
+    def _matches(self, key):
+        return key in self.src
 
-class Link(object):
+    def __repr__(self):
+        return str(self.soup)
+
+class IFrame(Frame):
+    pass
+
+class Link(HtmlObject):
     def __init__(self, browser, soup):
         self.browser = browser
         self.soup = soup
@@ -225,16 +261,17 @@ class Link(object):
         return soup2text(self.soup)
 
     def goto(self):
+        if not self.href:
+            raise BrowserError("link %s has no href attribute", self)
         self.browser.goto(self.href)
 
-class Forms(list):
-    def get(self, name):
-        forms = [form for form in self if form.id == name or form.name == name]
-        if forms:
-            return forms[0]
-        return None
+    def _matches(self, key):
+        return key in (self.href or u"") or key in (self.text or u"")
 
-class Form(object):
+    def __repr__(self):
+        return str(self.soup)
+
+class Form(HtmlObject):
     def __init__(self, browser, soup):
         self.browser = browser
         self.soup = soup
@@ -250,6 +287,10 @@ class Form(object):
     @property
     def name(self):
         return self.soup.get("name")
+
+    @property
+    def action(self):
+        return self.soup.get("action")
 
     def submit(self, submitName=None, **kwargs):
         """
@@ -316,7 +357,7 @@ class Form(object):
                     self.fields[name] = htmlentitiesdecode(value)
 
         return self.fields
-    
+
     def _update_submit_docstring(self):
         """
         Some Python magic to update the submit method's docstring according to
@@ -338,6 +379,9 @@ class Form(object):
 
     def __repr__(self):
         return "<Form name='%s' id='%s' action=%s'>" % (self.soup.get("name"), self.soup.get("id"), self.soup.get("action"))
+
+    def _matches(self, key):
+        return key in self.action or key == self.id or key == self.name
 
 # ------------------------------------------------------------------------------
 
