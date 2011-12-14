@@ -90,9 +90,9 @@ else:
             else:
                 method = urlfetch.POST
 
-            headers["Cookie"] = self._makeCookieHeader(self.cookie)
-
             while url is not None:
+                headers["Cookie"] = self._makeCookieHeader(self.cookie)
+                logger.info("urlfetch.fetch: method=%s, url=%s, payload=%s, headers=%r" % (method, url, data, headers))
                 response = urlfetch.fetch(
                     url=url,
                     payload=data,
@@ -105,9 +105,10 @@ else:
                 data = None # Next request will be a get, so no need to send the data again.
                 method = urlfetch.GET
                 self.cookie.load(response.headers.get('set-cookie', '')) # Load the cookies from the response
+                finalUrl = url
                 url = response.headers.get('location')
 
-            return URLResponse(response.final_url, response.headers, response.content)
+            return URLResponse(finalUrl, response.headers, response.content)
 
         def _makeCookieHeader(self, cookie):
             cookieHeader = ""
@@ -178,13 +179,13 @@ class Browser(object):
         newobj._reset()
         return newobj
 
-    def goto(self, url, postData=None, retries=3):
+    def goto(self, url, data=None, retries=3):
         """
         Goes to a URL, optionally passing it POST data.
         The loaded page can be accessed through self.page (as HTML text) and
         self.soup (as BeautifulSoup structure).
         """
-        response = self.urlopen(url, postData, retries)
+        response = self.urlopen(url, data, retries)
 
         if not self._history or url != self._history[-1]:
             self._history.append(url)
@@ -196,12 +197,11 @@ class Browser(object):
 
         return self.currentUrl
 
-    def urlopen(self, url, postData=None, retries=3):
+    def urlopen(self, url, data=None, retries=3):
         """
         Opens a URL, optionally passing it POST data.
         Returns a standard urrlib2 HTTPResponse objects.
         """
-        logger.info("urlopen: %s" % url)
         url = bytes(url, "ascii")
         if not url.startswith("http://") and not url.startswith("https://"):
             if self.currentUrl:
@@ -210,12 +210,13 @@ class Browser(object):
                 raise BrowserError("unknown url format, pass HTTP or HTTPS urls "
                     "or urls relative to current location (%s)" % (self.currentUrl))
 
+        logger.info("urlopen: %s" % url)
         headers = {"User-Agent" : self._userAgent}
 
         # try several times to protect from short network problems
         while True:
             try:
-                return self._opener.open(url, headers=headers, data=postData)
+                return self._opener.open(url, headers=headers, data=data)
             except Exception:
                 if retries <= 0:
                     raise
@@ -395,8 +396,8 @@ class Form(HtmlObject):
         fields.update(self.fields)
         fields.update(kwargs)
         fields = dict((bytes(k), bytes(v)) for (k, v) in fields.items() if v is not None)
-        postData = urllib.urlencode(fields)
-        self.browser.goto(action, postData)
+        data = urllib.urlencode(fields)
+        self.browser.goto(action, data)
         return self.browser.soup
 
     def _load_defaults(self):
