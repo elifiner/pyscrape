@@ -1,6 +1,5 @@
 import re
 import urllib
-import urllib2
 import logging
 import cookielib
 from BeautifulSoup import BeautifulSoup, NavigableString
@@ -23,45 +22,104 @@ class BrowserError(Exception):
     def __str__(self):
         return self.msg
 
-class StandardURLOpener(object):
-    class HTTPRequestLogger(urllib2.BaseHandler):
-        handler_order = 1000
-        def http_request(self, request):
-            logger.debug("HTTP %s: %s" % (request.get_method(), request.get_full_url()))
-            data = request.get_data()
-            if data:
-                logger.debug("\tData: %s" % data)
-            logger.debug("\tHeaders:")
-            for k, v in request.header_items():
-                logger.debug("\t\t%s: %s" % (k, v))
-            return request
-        https_request = http_request
-
-    def __init__(self):
-        self._passwordManager = urllib2.HTTPPasswordMgrWithDefaultRealm()
-        self._cookieJar = cookielib.CookieJar()
-        self._opener = urllib2.build_opener(
-            urllib2.HTTPCookieProcessor(self._cookieJar),
-            urllib2.HTTPBasicAuthHandler(self._passwordManager),
-            urllib2.HTTPDigestAuthHandler(self._passwordManager),
-            self.HTTPRequestLogger(),
-        )
-
+class URLOpener(object):
     def open(self, url, headers=None, data=None):
-        if headers is None:
-            headers = {}
-        request = urllib2.Request(url)
-        for k, v in headers.items():
-            request.add_header(k, v)
-        return self._opener.open(request, data=data)
+        # open a url and returns a URLRespose
+        raise NotImplemented()
 
-# ------------------------------------------------------------------------------
+class URLResponse(object):
+    def __init__(self, url, headers, data):
+        self.url = url
+        self.headers = headers
+        self.data = data
+
+try:
+    import urllib2
+except ImportError:
+    pass
+else:
+    class StandardURLOpener(URLOpener):
+        class HTTPRequestLogger(urllib2.BaseHandler):
+            handler_order = 1000
+            def http_request(self, request):
+                logger.debug("HTTP %s: %s" % (request.get_method(), request.get_full_url()))
+                data = request.get_data()
+                if data:
+                    logger.debug("\tData: %s" % data)
+                logger.debug("\tHeaders:")
+                for k, v in request.header_items():
+                    logger.debug("\t\t%s: %s" % (k, v))
+                return request
+            https_request = http_request
+
+        def __init__(self):
+            self._passwordManager = urllib2.HTTPPasswordMgrWithDefaultRealm()
+            self._cookieJar = cookielib.CookieJar()
+            self._opener = urllib2.build_opener(
+                urllib2.HTTPCookieProcessor(self._cookieJar),
+                urllib2.HTTPBasicAuthHandler(self._passwordManager),
+                urllib2.HTTPDigestAuthHandler(self._passwordManager),
+                self.HTTPRequestLogger(),
+            )
+
+        def open(self, url, headers=None, data=None):
+            if headers is None:
+                headers = {}
+            request = urllib2.Request(url)
+            for k, v in headers.items():
+                request.add_header(k, v)
+            response = self._opener.open(request, data=data)
+            return URLResponse(response.geturl(), response.info().dict, response.read())
+
+try:
+    from google.appengine.api import urlfetch
+except ImportError:
+    pass
+else:
+    import Cookie
+    class GoogleAppEngineURLOpener(URLOpener):
+        def __init__(self):
+            self.cookie = Cookie.SimpleCookie()
+
+        def open(self, url, headers=None, data=None):
+            if headers is None:
+                headers = {}
+
+            if data is None:
+                method = urlfetch.GET
+            else:
+                method = urlfetch.POST
+
+            headers["Cookie"] = self._makeCookieHeader(self.cookie)
+
+            while url is not None:
+                response = urlfetch.fetch(
+                    url=url,
+                    payload=data,
+                    method=method,
+                    headers=headers,
+                    allow_truncated=False,
+                    follow_redirects=False,
+                    deadline=10
+                )
+                data = None # Next request will be a get, so no need to send the data again.
+                method = urlfetch.GET
+                self.cookie.load(response.headers.get('set-cookie', '')) # Load the cookies from the response
+                url = response.headers.get('location')
+
+            return URLResponse(response.final_url, response.headers, response.content)
+
+        def _makeCookieHeader(self, cookie):
+            cookieHeader = ""
+            for value in cookie.values():
+                cookieHeader += "%s=%s; " % (value.key, value.value)
+            return cookieHeader
 
 class Browser(object):
-    def __init__(self, userAgent="pyscrape/1.0"):
+    def __init__(self, userAgent="pyscrape/1.0", openerClass=StandardURLOpener):
         self._userAgent = userAgent
         self._history = []
-        self._opener = StandardURLOpener()
+        self._opener = openerClass()
         self.currentUrl = None
         self.headers = {}
         self.page = ""
@@ -130,9 +188,9 @@ class Browser(object):
 
         if not self._history or url != self._history[-1]:
             self._history.append(url)
-        self.currentUrl = response.geturl()
-        self.headers = response.info()
-        self.page = response.read()
+        self.currentUrl = response.url
+        self.headers = response.headers
+        self.page = response.data
         self.soup = BeautifulSoup(self.page, fromEncoding=self.encoding)
         self._reset()
 
@@ -235,9 +293,6 @@ class Browser(object):
         # display page in browser
         import webbrowser
         webbrowser.open(tempName)
-
-
-# ------------------------------------------------------------------------------
 
 class HtmlObjects(list):
     def get(self, key):
@@ -406,8 +461,6 @@ class Form(HtmlObject):
 
     def _matches(self, key):
         return key in self.action or key == self.id or key == self.name
-
-# ------------------------------------------------------------------------------
 
 def htmlentitiesdecode(text):
     if text is None:
