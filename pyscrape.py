@@ -89,7 +89,7 @@ class Browser(object):
 
     @property
     def encoding(self):
-        re.search("charset=(.+)$", b.headers.get("content-type")).group(1)
+        re.search("charset=(.+)$", self.headers.get("content-type")).group(1)
 
     def duplicate(self):
         """
@@ -107,7 +107,24 @@ class Browser(object):
         The loaded page can be accessed through self.page (as HTML text) and
         self.soup (as BeautifulSoup structure).
         """
-        logger.info("goto: %s" % url)
+        response = self.urlopen(url, postData, username, password, retries)
+
+        if not self._history or url != self._history[-1]:
+            self._history.append(url)
+        self.currentUrl = response.geturl()
+        self.headers = response.info()
+        self.page = response.read()
+        self.soup = BeautifulSoup(self.page, fromEncoding=self.encoding)
+        self._reset()
+
+        return self.currentUrl
+
+    def urlopen(self, url, postData=None, username=None, password=None, retries=3):
+        """
+        Opens a URL, optionally passing it POST data, and HTTP BASIC authentication
+        data. Returns a standard urrlib2 HTTPResponse objects.
+        """
+        logger.info("urlopen: %s" % url)
         url = bytes(url, "ascii")
         if not url.startswith("http://") and not url.startswith("https://"):
             if self.currentUrl:
@@ -122,24 +139,13 @@ class Browser(object):
         # try several times to protect from short network problems
         while True:
             try:
-                response = self._opener.open(request, postData)
-                if not self._history or url != self._history[-1]:
-                    self._history.append(url)
-                self.currentUrl = response.geturl()
-                self.headers = response.info()
-                self.page = response.read()
-                self.soup = BeautifulSoup(self.page, fromEncoding=self._get_http_encoding())
-                self._reset()
+                return self._opener.open(request, postData)
             except Exception:
                 if retries <= 0:
                     raise
                 import time
                 time.sleep(1) # wait a second between retries
                 retries -= 1
-            else:
-                break
-
-        return self.currentUrl
 
     def _get_http_encoding(self):
         contentType = self.headers.get("content-type")
