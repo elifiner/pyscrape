@@ -23,35 +23,45 @@ class BrowserError(Exception):
     def __str__(self):
         return self.msg
 
-class HTTPRequestLogger(urllib2.BaseHandler):
-    handler_order = 1000
-    def http_request(self, request):
-        logger.debug("HTTP %s: %s" % (request.get_method(), request.get_full_url()))
-        data = request.get_data()
-        if data:
-            logger.debug("\tData: %s" % data)
-        logger.debug("\tHeaders:")
-        for k, v in request.header_items():
-            logger.debug("\t\t%s: %s" % (k, v))
-        return request
-    https_request = http_request
+class StandardURLOpener(object):
+    class HTTPRequestLogger(urllib2.BaseHandler):
+        handler_order = 1000
+        def http_request(self, request):
+            logger.debug("HTTP %s: %s" % (request.get_method(), request.get_full_url()))
+            data = request.get_data()
+            if data:
+                logger.debug("\tData: %s" % data)
+            logger.debug("\tHeaders:")
+            for k, v in request.header_items():
+                logger.debug("\t\t%s: %s" % (k, v))
+            return request
+        https_request = http_request
+
+    def __init__(self):
+        self._passwordManager = urllib2.HTTPPasswordMgrWithDefaultRealm()
+        self._cookieJar = cookielib.CookieJar()
+        self._opener = urllib2.build_opener(
+            urllib2.HTTPCookieProcessor(self._cookieJar),
+            urllib2.HTTPBasicAuthHandler(self._passwordManager),
+            urllib2.HTTPDigestAuthHandler(self._passwordManager),
+            self.HTTPRequestLogger(),
+        )
+
+    def open(self, url, headers=None, data=None):
+        if headers is None:
+            headers = {}
+        request = urllib2.Request(url)
+        for k, v in headers.items():
+            request.add_header(k, v)
+        return self._opener.open(request, data=data)
 
 # ------------------------------------------------------------------------------
 
 class Browser(object):
     def __init__(self, userAgent="pyscrape/1.0"):
         self._userAgent = userAgent
-        self._passwordManager = urllib2.HTTPPasswordMgrWithDefaultRealm()
-        self._cookieJar = cookielib.CookieJar()
         self._history = []
-
-        self._opener = urllib2.build_opener(
-            urllib2.HTTPCookieProcessor(self._cookieJar),
-            urllib2.HTTPBasicAuthHandler(self._passwordManager),
-            urllib2.HTTPDigestAuthHandler(self._passwordManager),
-            HTTPRequestLogger(),
-        )
-
+        self._opener = StandardURLOpener()
         self.currentUrl = None
         self.headers = {}
         self.page = ""
@@ -94,7 +104,11 @@ class Browser(object):
 
     @property
     def encoding(self):
-        re.search("charset=(.+)$", self.headers.get("content-type")).group(1)
+        m = re.search("charset=(.+)$", self.headers.get("content-type"))
+        if m:
+            return m.group(1)
+        else:
+            return None
 
     def duplicate(self):
         """
@@ -106,13 +120,13 @@ class Browser(object):
         newobj._reset()
         return newobj
 
-    def goto(self, url, postData=None, username=None, password=None, retries=3):
+    def goto(self, url, postData=None, retries=3):
         """
         Goes to a URL, optionally passing it POST data.
         The loaded page can be accessed through self.page (as HTML text) and
         self.soup (as BeautifulSoup structure).
         """
-        response = self.urlopen(url, postData, username, password, retries)
+        response = self.urlopen(url, postData, retries)
 
         if not self._history or url != self._history[-1]:
             self._history.append(url)
@@ -124,10 +138,10 @@ class Browser(object):
 
         return self.currentUrl
 
-    def urlopen(self, url, postData=None, username=None, password=None, retries=3):
+    def urlopen(self, url, postData=None, retries=3):
         """
-        Opens a URL, optionally passing it POST data, and HTTP BASIC authentication
-        data. Returns a standard urrlib2 HTTPResponse objects.
+        Opens a URL, optionally passing it POST data.
+        Returns a standard urrlib2 HTTPResponse objects.
         """
         logger.info("urlopen: %s" % url)
         url = bytes(url, "ascii")
@@ -138,13 +152,12 @@ class Browser(object):
                 raise BrowserError("unknown url format, pass HTTP or HTTPS urls "
                     "or urls relative to current location (%s)" % (self.currentUrl))
 
-        request = urllib2.Request(url)
-        request.add_header("User-Agent", self._userAgent)
+        headers = {"User-Agent" : self._userAgent}
 
         # try several times to protect from short network problems
         while True:
             try:
-                return self._opener.open(request, postData)
+                return self._opener.open(url, headers=headers, data=postData)
             except Exception:
                 if retries <= 0:
                     raise
