@@ -19,6 +19,7 @@ class BrowserTestBase(unittest.TestCase):
             response = Mock(name="response")
             response.read = lambda: self.mockReturnedHtmls[req.get_full_url()]
             response.geturl = lambda: self.mockRedirectedUrls.get(req.get_full_url()) or req.get_full_url()
+            response.info.return_value.get = {"content-type":"text/html; charset=ut8"}.get
             return response
 
         self.mock_http_open = Mock(name="http_open", side_effect=_http_open)

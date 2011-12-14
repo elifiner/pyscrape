@@ -3,8 +3,13 @@ import urllib
 import urllib2
 import logging
 import cookielib
-from collections import OrderedDict
 from BeautifulSoup import BeautifulSoup, NavigableString
+
+# Python 2.5 support
+try:
+    from collections import OrderedDict
+except ImportError:
+    OrderedDict = dict
 
 logger = logging.getLogger("PyScrape")
 
