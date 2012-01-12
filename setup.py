@@ -44,6 +44,7 @@ setup(
         'Operating System :: POSIX',
         'Programming Language :: Python',
         'Topic :: Internet :: WWW/HTTP'
-    ]
+    ],
+    install_requires=["BeautifulSoup>=3.2.0"],
 )
 
