@@ -26,7 +26,7 @@ well using urllib2 and on Google App Engine using Google's urlfetch API.
 
 setup(
     name='pyscrape',
-    version='0.1.0',
+    version='0.1.1',
     description='A pythonic web scraping library.',
     long_description=DESCRIPTION,
     author='Eli Golovinsky',
