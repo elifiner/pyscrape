@@ -461,7 +461,7 @@ class Form(HtmlObject):
         return "<Form name='%s' id='%s' action=%s'>" % (self.soup.get("name"), self.soup.get("id"), self.soup.get("action"))
 
     def _matches(self, key):
-        return key in self.action or key == self.id or key == self.name
+        return key in (self.action or "") or key == self.id or key == self.name
 
 def htmlentitiesdecode(text):
     if text is None:
