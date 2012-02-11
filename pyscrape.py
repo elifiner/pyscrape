@@ -76,10 +76,35 @@ try:
 except ImportError:
     pass
 else:
-    import Cookie
+    class ResponseProxy(object):
+        def __init__(self, response):
+            self.response = response
+
+        def info(self):
+            return self
+
+        def getheaders(self, name):
+            name = name.lower()
+            headers = [v for k, v in self.response.headers.items() if k.lower() == name]
+            if name == "set-cookie":
+                cookies = []
+                for header in headers:
+                    cookies.extend(self._split_cookie_header(header))
+                return cookies
+            else:
+                return headers
+
+        def _split_cookie_header(self, header):
+            """Splits a single comma-delimited set-cookie header into multiple headers, one for each cookie"""
+            # replace commas with \xff which is not allowed in HTTP headers
+            header = re.sub("Expires=.+?;", lambda m: m.group(0).replace(",", "\xff"), header)
+            cookies = re.split(",\s*", header)
+            cookies = [cookie.replace("\xff", ",") for cookie in cookies]
+            return cookies
+
     class GoogleAppEngineURLOpener(URLOpener):
         def __init__(self):
-            self.cookie = Cookie.SimpleCookie()
+            self.cookiejar = cookielib.CookieJar()
 
         def open(self, url, headers=None, data=None):
             if headers is None:
@@ -90,31 +115,31 @@ else:
             else:
                 method = urlfetch.POST
 
-            while url is not None:
-                headers["Cookie"] = self._makeCookieHeader(self.cookie)
-                logger.info("urlfetch.fetch: method=%s, url=%s, payload=%s, headers=%r" % (method, url, data, headers))
-                response = urlfetch.fetch(
-                    url=url,
-                    payload=data,
-                    method=method,
-                    headers=headers,
-                    allow_truncated=False,
-                    follow_redirects=False,
-                    deadline=10
-                )
-                data = None # Next request will be a get, so no need to send the data again.
+            count = 0
+            while True:
+                headers.update(self._makeCookieHeaders(url))
+                response = urlfetch.fetch(url=url, payload=data, method=method, headers=headers,
+                    allow_truncated=False, follow_redirects=False, deadline=10)
+                data = None
                 method = urlfetch.GET
-                self.cookie.load(response.headers.get('set-cookie', '')) # Load the cookies from the response
-                finalUrl = url
-                url = response.headers.get('location')
+                self._extractCookieHeaders(response, url)
+                location = response.headers.get('location')
+                if location is None:
+                    break
+                url = urljoin(url, location) if location else None
+                count += 1
+                if count == 5:
+                    raise BrowserError("too many redirects (recursive?)")
 
-            return URLResponse(finalUrl, response.headers, response.content)
+            return URLResponse(url, response.headers, response.content)
 
-        def _makeCookieHeader(self, cookie):
-            cookieHeader = ""
-            for value in cookie.values():
-                cookieHeader += "%s=%s; " % (value.key, value.value)
-            return cookieHeader
+        def _makeCookieHeaders(self, url):
+            request = urllib2.Request(url)
+            self.cookiejar.add_cookie_header(request)
+            return dict(request.header_items())
+
+        def _extractCookieHeaders(self, response, url):
+            self.cookiejar.extract_cookies(ResponseProxy(response), urllib2.Request(url))
 
 class Browser(object):
     def __init__(self, userAgent="pyscrape/1.0", openerClass=StandardURLOpener):
